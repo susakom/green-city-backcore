@@ -49,8 +49,8 @@ jdbc:postgresql://postgres_server:5432/greencity
 
 You must also specify the following environment variables:
 ```text
-EMAIL_ADDRESS=gcdocker@gmail.com
-EMAIL_PASSWORD=GreenCity7_Docker
+EMAIL_ADDRESS=susakdevops@gmail.com
+EMAIL_PASSWORD=odkoxngjeknvsgrf
 GOOGLE_CLIENT_ID=129513550972-ffqpdq6e5basbn9pcdvroqf20ffcg09f.apps.googleusercontent.com
 GOOGLE_API_KEY=AIzaSyCN1iqS_3TcZ2d2d5SZwUnTOqDiRmwG13c
 GOOGLE_CLIENT_ID_MANAGER=236387301472-5fqure34s5flqp7fl94jiem8todv64d5.apps.googleusercontent.com
