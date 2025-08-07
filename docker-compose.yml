@@ -61,6 +61,7 @@ services:
       - CHAT_LINK=${CHAT_LINK}
       - PROFILE=${PROFILE}
       - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS}
+      - CLIENT_APP_URL=${CLIENT_APP_URL}
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,6 +84,7 @@ services:
       - EMAIL_PASSWORD=${EMAIL_PASSWORD}
       - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-change-in-prod}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - CLIENT_APP_URL=${CLIENT_APP_URL}
     depends_on:
       postgres:
         condition: service_healthy
@@ -95,6 +97,8 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: gc-frontend
+    volumes:
+      - ./config.js:/usr/share/nginx/html/config.js
     ports:
       - "4200:4200"
     environment:
