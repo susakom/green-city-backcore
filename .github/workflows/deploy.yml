@@ -1,1 +1,207 @@
-#
+name: Deploy Backcore
+
+on:
+  workflow_dispatch:
+  #push:
+  #  branches: [ "develop" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+          
+      - name: Get EC2 Public IP and DNS
+        id: get_instance_info
+        run: |
+          # Получаем информацию об инстансе в формате JSON
+          INSTANCE_INFO=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=${{ secrets.EC2_INSTANCE_NAME }}" "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0]" \
+            --output json)
+      
+          # Проверяем, найден ли инстанс
+          if [ -z "$INSTANCE_INFO" ] || [ "$INSTANCE_INFO" = "null" ]; then
+            echo "❌ Не удалось найти запущенный инстанс с именем: ${{ secrets.EC2_INSTANCE_NAME }}"
+            exit 1
+          fi
+      
+          # Извлекаем Public IP и Public DNS
+          PUBLIC_IP=$(echo $INSTANCE_INFO | jq -r '.PublicIpAddress')
+          PUBLIC_DNS=$(echo $INSTANCE_INFO | jq -r '.PublicDnsName')
+      
+          # Проверяем, что IP и DNS получены
+          if [ -z "$PUBLIC_IP" ] || [ "$PUBLIC_IP" = "null" ]; then
+            echo "⚠️  Публичный IP не назначен (возможно, инстанс ещё не готов)"
+          else
+            echo "✅ Найден публичный IP: $PUBLIC_IP"
+          fi
+      
+          if [ -z "$PUBLIC_DNS" ] || [ "$PUBLIC_DNS" = "null" ]; then
+            echo "⚠️  Публичное DNS не назначено"
+          else
+            echo "✅ Найдено публичное DNS: $PUBLIC_DNS"
+          fi
+      
+          # Сохраняем в outputs для использования в других шагах
+          echo "ec2_public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+          echo "ec2_public_dns=$PUBLIC_DNS" >> $GITHUB_OUTPUT
+
+
+          
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, tag, and push image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: greencity-frontend
+          IMAGE_FRONTEND_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_FRONTEND_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_FRONTEND_TAG
+
+          # 🔥 Создаём временный файл с переменными
+           echo "IMAGE_FRONTEND_TAG=$IMAGE_FRONTEND_TAG" > .add_env_frontend
+           echo "ECR_REGISTRY=$ECR_REGISTRY" >> .add_env_frontend
+           echo "ECR_REPOSITORY=$ECR_REPOSITORY" >> .add_env_frontend
+      
+          # Проверка
+           cat .add_env_frontend
+      - name: Copy .add_env_frontend to EC2
+        uses: appleboy/scp-action@v0.1.5
+        with:
+          host: ${{ steps.get_instance_info.outputs.ec2_public_dns }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: ".add_env_frontend"
+          target: "/home/ubuntu"
+
+
+
+      - name: Generate config.js
+        env:
+          PUBLIC_IP: ${{ steps.get_instance_info.outputs.ec2_public_ip }}
+        run: |
+          # PUBLIC_IP=${{ secrets.EC2_PUBLIC_IP }}
+          cat > config.js << EOF
+          window._env_ = {
+            backendCoreUrl: "http://${PUBLIC_IP}:8080/",
+            backendUserUrl: "http://${PUBLIC_IP}:8060/",
+            frontendUrl: "http://${PUBLIC_IP}:4200/",
+            socketUrl: "http://${PUBLIC_IP}:8080/socket"
+          };
+          EOF
+
+      - name: Generate .env
+        env:
+          PUBLIC_IP: ${{ steps.get_instance_info.outputs.ec2_public_ip }}
+        run: |
+          # Проверка, что IP получен
+          if [ -z "$PUBLIC_IP" ]; then
+            echo "❌ Ошибка: PUBLIC_IP пустой. Проверьте EC2 instance."
+            exit 1
+          fi
+      
+          # Получаем секреты из AWS Secrets Manager
+          echo "🔐 Получаем секреты из AWS Secrets Manager..."
+          SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id greencity-rds-env --query SecretString --output text)
+      
+          # Парсим значения
+          DATASOURCE_URL=$(echo $SECRET_JSON | jq -r '.DATASOURCE_URL')
+          DATASOURCE_USER=$(echo $SECRET_JSON | jq -r '.DATASOURCE_USER')
+          DATASOURCE_PASSWORD=$(echo $SECRET_JSON | jq -r '.DATASOURCE_PASSWORD')
+          EMAIL_ADDRESS=$(echo $SECRET_JSON | jq -r '.EMAIL_ADDRESS')
+          EMAIL_PASSWORD=$(echo $SECRET_JSON | jq -r '.EMAIL_PASSWORD')
+      
+          # Формируем .env
+          cat > .env << EOF
+              # === База данных ===
+              DATASOURCE_URL=$DATASOURCE_URL
+              DATASOURCE_USER=$DATASOURCE_USER
+              DATASOURCE_PASSWORD=$DATASOURCE_PASSWORD
+              
+              # === Email ===
+              EMAIL_ADDRESS=$EMAIL_ADDRESS
+              EMAIL_PASSWORD=$EMAIL_PASSWORD
+              
+              # === Google ===
+              GOOGLE_CLIENT_ID=129513550972-ffqpdq6e5basbn9pcdvroqf20ffcg09f.apps.googleusercontent.com
+              GOOGLE_API_KEY=AIzaSyCN1iqS_3TcZ2d2d5SZwUnTOqDiRmwG13c
+              GOOGLE_CLIENT_ID_MANAGER=236387301472-5fqure34s5flqp7fl94jiem8todv64d5.apps.googleusercontent.com
+              
+              # === Cloudinary ===
+              CLOUD_NAME=greencity-lv448java
+              API_KEY=675739387883727
+              API_SECRET=3nJsbn28s_RWJJo67kG8OY-ywJ8
+              
+              # === Azure ===
+              AZURE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=csb10032000a548f571;AccountKey=qV2VLVZlzxuEq8zGTgeiVE9puJiELNRPZcB9YgTSjZ3wKdWVA7kPjSOp6ESHlVMTJfHxB6N+iaV2TOlbe1GTvg==
+              AZURE_CONTAINER_NAME=allfiles
+              
+              # === Ограничения файлов ===
+              MAX_FILE_SIZE=2MB
+              MAX_REQUEST_SIZE=2MB
+              
+              # === Google Cloud Storage ===
+              BUCKET_NAME=staging.greencity-c5a3a.appspot.com
+              STATIC_URL=https://storage.cloud.google.com/
+              DEFAULT_PROFILE_PICTURE=https://storage.cloud.google.com/staging.greencity-c5a3a.appspot.com/3d1a4092-c31e-4a0f-814b-57a0e4de0851
+              
+              # === Прочие ===
+              CHAT_LINK=http://chat:8030
+              PROFILE=docker
+              GOOGLE_APPLICATION_CREDENTIALS="/home/ubuntu/google-creds.json"
+              
+              # === URL фронтенда ===
+              CLIENT_APP_URL=http://${PUBLIC_IP}:4200
+              EOF
+      
+          echo "✅ Файл .env успешно создан"
+          
+      - name: Copy files to EC2
+        uses: appleboy/scp-action@v0.1.5
+        with:
+          host: ${{ steps.get_instance_info.outputs.ec2_public_dns }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "config.js,.env"
+          target: "/home/ubuntu"
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1
+        env:
+            IMAGE_FRONTEND_TAG: ${{ github.sha }}
+
+        with:
+          host: ${{ steps.get_instance_info.outputs.ec2_public_dns }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+                  ls -al
+                  # 🔐 Авторизация в AWS ECR
+                  echo "🔐 Авторизация в Amazon ECR..."
+                  aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
+                  docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+                  echo "✅ Загружаем переменные из .add_env_frontend"
+                  set -a
+                  source .add_env_frontend
+                  source .add_env_backuser
+                  set +a
+                  # ✅ Проверяем, что переменная есть
+                  echo "🚀 Деплой frontend с тегом: $IMAGE_FRONTEND_TAG"
+                  echo "Тег образа= $IMAGE_FRONTEND_TAG"
+                  docker-compose up -d 
+                  docker images
+                  docker ps -a
