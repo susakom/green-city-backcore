@@ -66,26 +66,25 @@ jobs:
       - name: Build, tag, and push image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: greencity-frontend
+          ECR_REPOSITORY: greencity-backcore
           IMAGE_BACKCORE_TAG: ${{ github.sha }}
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_BACKCORE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_BACKCORE_TAG
 
           # 🔥 Создаём временный файл с переменными
-           echo "IMAGE_BACKCORE_TAG=$IMAGE_BACKCORE_TAG" > .add_env_frontend
-           echo "ECR_REGISTRY=$ECR_REGISTRY" >> .add_env_frontend
-           echo "ECR_REPOSITORY=$ECR_REPOSITORY" >> .add_env_frontend
+           echo "IMAGE_BACKCORE_TAG=$IMAGE_BACKCORE_TAG" > .add_env_backcore
+           echo "ECR_REPOSITORY=$ECR_REPOSITORY" >> .add_env_backcore
       
           # Проверка
-           cat .add_env_frontend
-      - name: Copy .add_env_frontend to EC2
+           cat .add_env_backcore
+      - name: Copy .add_env_backcore to EC2
         uses: appleboy/scp-action@v0.1.5
         with:
           host: ${{ steps.get_instance_info.outputs.ec2_public_dns }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: ".add_env_frontend"
+          source: ".add_env_backcore"
           target: "/home/ubuntu"
 
 
@@ -194,13 +193,14 @@ jobs:
                   echo "🔐 Авторизация в Amazon ECR..."
                   aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
                   docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-                  echo "✅ Загружаем переменные из .add_env_frontend"
+                  echo "✅ Загружаем переменные из .add_env_backcore"
                   set -a
                   source .add_env_frontend
                   source .add_env_backuser
+                  source .add_env_backcore
                   set +a
                   # ✅ Проверяем, что переменная есть
-                  echo "🚀 Деплой frontend с тегом: $IMAGE_BACKCORE_TAG"
+                  echo "🚀 Деплой backcore с тегом: $IMAGE_BACKCORE_TAG"
                   echo "Тег образа= $IMAGE_BACKCORE_TAG"
                   docker-compose up -d 
                   docker images
